@@ -41,6 +41,8 @@ FIELD_MAP = {
     "Total budget": "total_budget",
     "EU grants": "eu_grants",
     "Goals/remits of your organisation": "goals",
+    "Estimated costs related to lobbying activities": "lobbying_cost",
+    "Number of persons involved in EU lobbying activities": "lobbying_persons",
     "Level of interest represented": "level_of_interest",
     "Fields of interest": "fields_of_interest",
     "Activities": "activities",

@@ -11,7 +11,6 @@ _mod = importlib.import_module("03_tier")
 parse_budget = _mod.parse_budget
 score_keywords = _mod.score_keywords
 score_org_type = _mod.score_org_type
-score_budget = _mod.score_budget
 score_org = _mod.score_org
 assign_tier = _mod.assign_tier
 tier_profiles = _mod.tier_profiles
@@ -63,6 +62,15 @@ class TestScoreOrgType:
     def test_federation(self):
         assert score_org_type("European federation") == 20
 
+    def test_aisbl(self):
+        # Belgian legal form used by virtually all EU trade associations
+        assert score_org_type("aisbl") == 20
+        assert score_org_type("AISBL") == 20
+
+    def test_verband(self):
+        # German trade association form
+        assert score_org_type("Verband") == 20
+
     def test_corporation(self):
         assert score_org_type("corporation") == 12
 
@@ -75,72 +83,89 @@ class TestScoreOrgType:
 
 
 class TestScoreBudget:
-    def test_high_budget(self):
-        assert score_budget("500,000") == 20
+    def test_lobbying_cost_preferred(self):
+        # lobbying_cost takes priority over total_budget
+        profile = {"lobbying_cost": "500,000", "total_budget": "5,000,000,000"}
+        from importlib import import_module
+        mod = import_module("03_tier")
+        assert mod.score_budget(profile) == 20
 
-    def test_mid_budget(self):
-        assert score_budget("100,000") == 10
+    def test_falls_back_to_total_budget(self):
+        from importlib import import_module
+        mod = import_module("03_tier")
+        profile = {"total_budget": "100,000"}
+        assert mod.score_budget(profile) > 0
 
-    def test_low_budget(self):
-        assert score_budget("10,000") == 3
+    def test_huge_total_budget_capped(self):
+        # Energinet-style: €1.6B total budget is org size, not lobbying — capped at 10
+        from importlib import import_module
+        mod = import_module("03_tier")
+        profile = {"total_budget": "1,600,000,000"}
+        assert mod.score_budget(profile) == 10
 
     def test_unknown_budget_neutral(self):
-        # Unknown budget should not penalise — returns 0 (neutral)
-        assert score_budget("") == 0
-        assert score_budget(None) == 0
+        from importlib import import_module
+        mod = import_module("03_tier")
+        assert mod.score_budget({}) == 0
+        assert mod.score_budget({"total_budget": ""}) == 0
 
 
 class TestScoreOrg:
-    def test_tier1_trade_assoc_grid(self):
+    def test_tier1_aisbl_electricity(self):
+        # Eurelectric-style: electricity industry association → should be Tier 1
         profile = {
-            "goals": "We lobby on electricity grid and cross-border cost allocation",
-            "fields_of_interest": "Energy",
-            "entity_form": "European trade association",
-            "total_budget": "500,000",
+            "goals": "The mission of Eurelectric, the European electricity industry association",
+            "fields_of_interest": "Energy Climate",
+            "entity_form": "aisbl",
+            "lobbying_cost": "500,000",
         }
         s = score_org(profile)
-        assert s >= 60, f"Expected Tier 1 score (>=60), got {s}"
+        assert assign_tier(s) == 1, f"Expected Tier 1, got Tier {assign_tier(s)} (score={s})"
+
+    def test_tier1_german_tso(self):
+        # APG-style: German goals mentioning Übertragungsnetzbetreiber
+        profile = {
+            "goals": "Die APG ist Österreichs Übertragungsnetzbetreiber",
+            "fields_of_interest": "Energy",
+            "entity_form": "Aktiengesellschaft",
+        }
+        s = score_org(profile)
+        assert assign_tier(s) == 1, f"Expected Tier 1, got Tier {assign_tier(s)} (score={s})"
+
+    def test_tier1_grid_operator(self):
+        profile = {
+            "goals": "TenneT is a leading European grid operator",
+            "entity_form": "Private Company with Limited Liability",
+        }
+        s = score_org(profile)
+        assert assign_tier(s) == 1, f"Expected Tier 1, got Tier {assign_tier(s)} (score={s})"
 
     def test_tier2_company_energy(self):
         profile = {
             "goals": "We operate renewable energy assets across Europe",
             "fields_of_interest": "Energy Climate",
             "entity_form": "corporation",
-            "total_budget": "100,000",
         }
         s = score_org(profile)
-        assert 30 <= s < 60, f"Expected Tier 2 score (30-59), got {s}"
+        assert assign_tier(s) == 2, f"Expected Tier 2, got Tier {assign_tier(s)} (score={s})"
 
     def test_tier3_ngo_climate(self):
         profile = {
             "goals": "We advocate for climate action and environmental policy",
             "fields_of_interest": "Environment",
             "entity_form": "NGO",
-            "total_budget": "20,000",
         }
         s = score_org(profile)
-        assert 10 <= s < 30, f"Expected Tier 3 score (10-29), got {s}"
+        assert assign_tier(s) == 3, f"Expected Tier 3, got Tier {assign_tier(s)} (score={s})"
 
     def test_untiered_pharma(self):
         profile = {
             "goals": "We represent pharmaceutical companies",
             "fields_of_interest": "Public health",
-            "entity_form": "association",
-            "total_budget": "50,000",
+            "entity_form": "",
         }
         s = score_org(profile)
-        # Trade association score (20) + budget (10) = 30 → Tier 2
-        # This is correct: it's a well-resourced trade association, just off-topic
-        # The keyword score is 0, so: 0 + 20 + 10 = 30 → Tier 2
-        # If we want truly off-topic, use minimal budget and no org boost
-        profile2 = {
-            "goals": "We represent pharmaceutical companies",
-            "fields_of_interest": "Public health",
-            "entity_form": "",
-            "total_budget": "",
-        }
-        s2 = score_org(profile2)
-        assert assign_tier(s2) is None, f"Expected None tier, got tier {assign_tier(s2)} (score={s2})"
+        assert assign_tier(s) is None, f"Expected untiered, got Tier {assign_tier(s)} (score={s})"
 
     def test_missing_fields_dont_crash(self):
         assert score_org({}) == 0
@@ -150,14 +175,14 @@ class TestScoreOrg:
 class TestAssignTier:
     def test_tier_1(self):
         assert assign_tier(75) == 1
-        assert assign_tier(60) == 1
+        assert assign_tier(40) == 1
 
     def test_tier_2(self):
-        assert assign_tier(59) == 2
-        assert assign_tier(30) == 2
+        assert assign_tier(39) == 2
+        assert assign_tier(22) == 2
 
     def test_tier_3(self):
-        assert assign_tier(29) == 3
+        assert assign_tier(21) == 3
         assert assign_tier(10) == 3
 
     def test_untiered(self):

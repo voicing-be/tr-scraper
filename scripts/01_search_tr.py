@@ -185,9 +185,11 @@ async def search_org(page, org_name: str) -> dict | None:
         match = best_match(org_name, candidates)
         if match:
             log.info(f"  ✓ matched {match['name']!r} (score={match['match_score']})")
+            low_conf = match["match_score"] < 0.5
+            return {**match, "query": org_name, "low_confidence": low_conf}
         else:
             log.warning(f"  ✗ no match for {org_name!r}")
-        return {**match, "query": org_name} if match else {"query": org_name, "tr_id": None, "name": None, "match_score": 0}
+        return {"query": org_name, "tr_id": None, "name": None, "match_score": 0, "low_confidence": True}
 
     except Exception as e:
         log.error(f"Error searching {org_name!r}: {e}")

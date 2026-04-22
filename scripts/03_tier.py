@@ -23,27 +23,52 @@ import pandas as pd
 # ---------------------------------------------------------------------------
 
 KEYWORDS_TIER1 = [
+    # Core EU Grids Package terms
     "grid", "cbca", "article 17", "cross-border cost", "cross-border cost allocation",
     "transmission network", "electricity network", "interconnector", "entsoe", "entso-e",
     "power grid", "grid infrastructure", "offshore grid", "offshore network",
+    # Broader grid/network operator terms
+    "transmission system", "distribution system", "system operator", "network operator",
+    "grid operator", "transmission operator", "distribution operator",
+    "smart grid", "ten-e", "projects of common interest", "offshore wind integration",
+    "network tariff", "grid access", "grid investment", "network investment",
+    # German (many TSOs/DSOs register goals in German)
+    "übertragungsnetz", "verteilernetz", "netzbetreiber", "netzentgelt",
+    "übertragungsnetzbetreiber", "leitungsnetzbetreiber", "stromnetz",
+    # French
+    "réseau électrique", "gestionnaire de réseau", "transport d'électricité",
+    "réseau de transport", "opérateur de réseau",
+    # Dutch
+    "elektriciteitsnet", "netbeheerder", "transmissienet",
 ]
 KEYWORDS_TIER2 = [
     "energy", "electricity", "power", "renewable", "hydrogen", "gas",
     "storage", "flexibility", "demand response", "electrification",
-    "eu taxonomy", "decarbonisation", "clean energy",
+    "eu taxonomy", "decarbonisation", "decarbonization", "clean energy",
+    "energy market", "electricity market", "energy transition", "net zero",
+    "offshore wind", "wind energy", "solar", "energy infrastructure",
+    # German
+    "energie", "strom", "erneuerbare", "energiewende",
+    # French
+    "énergie", "électricité", "transition énergétique",
 ]
 KEYWORDS_TIER3 = [
     "industry", "climate", "environment", "sustainability", "digital",
-    "transport", "infrastructure",
+    "transport", "infrastructure", "carbon", "emissions",
 ]
 
 ORG_TYPE_SCORES = {
-    # Trade / industry associations score highest — they exist to track policy
+    # Trade / industry associations — exist specifically to track and influence policy
     "trade": 20, "association": 20, "federation": 20, "confederation": 20,
     "union": 15, "alliance": 15, "council": 15, "chamber": 15,
+    # International non-profit / Belgian legal forms used by most EU trade associations
+    "aisbl": 20, "asbl": 20, "ivzw": 20, "vzw": 20,
+    # German/Austrian associations
+    "verein": 18, "verband": 20, "interessenverband": 20,
     # Companies
     "corporation": 12, "company": 12, "limited": 12, "gmbh": 12,
-    "ag": 10, "sa": 10, "nv": 10, "bv": 10, "spa": 10, "ab": 10,
+    "ag": 10, "sa": 10, "nv": 10, "bv": 10, "spa": 10,
+    "plc": 12, "se": 10, "inc": 10,
     # Other
     "ngo": 5, "foundation": 5, "institute": 5,
 }
@@ -94,16 +119,31 @@ def score_org_type(entity_form: str) -> int:
     return 0
 
 
-def score_budget(budget_str: str) -> int:
-    """Score based on lobbying budget."""
-    budget = parse_budget(budget_str)
-    if budget is None:
-        return 0  # unknown = neutral, don't penalise
-    if budget >= 200_000:
-        return 20
-    if budget >= 50_000:
+def score_budget(profile: dict) -> int:
+    """
+    Score based on lobbying cost. Uses lobbying_cost if available (scraped from
+    'Estimated costs related to lobbying activities'), falls back to total_budget.
+    total_budget for public utilities reflects org size, not lobbying effort — treat
+    it as a weak signal by capping the contribution.
+    """
+    lobbying = parse_budget(profile.get("lobbying_cost", ""))
+    if lobbying is not None:
+        if lobbying >= 200_000:
+            return 20
+        if lobbying >= 50_000:
+            return 10
+        return 3
+
+    total = parse_budget(profile.get("total_budget", ""))
+    if total is None:
+        return 0
+    # total_budget for large public companies is in the billions — cap at 10pts
+    # to avoid inflating scores for utilities that aren't lobbying heavily
+    if total >= 500_000:
         return 10
-    return 3
+    if total >= 50_000:
+        return 5
+    return 0
 
 
 def score_org(profile: dict) -> int:
@@ -116,15 +156,19 @@ def score_org(profile: dict) -> int:
     return (
         score_keywords(text)
         + score_org_type(profile.get("entity_form", ""))
-        + score_budget(profile.get("total_budget", ""))
+        + score_budget(profile)
     )
 
 
 def assign_tier(score: int) -> int | None:
-    """Map score to Tier 1/2/3 or None (genuinely off-topic)."""
-    if score >= 60:
+    """
+    Map score to Tier 1/2/3 or None.
+    Thresholds calibrated so that energy trade associations (aisbl + electricity keywords)
+    land in Tier 1, general energy companies in Tier 2, adjacent orgs in Tier 3.
+    """
+    if score >= 40:
         return 1
-    if score >= 30:
+    if score >= 22:
         return 2
     if score >= 10:
         return 3
